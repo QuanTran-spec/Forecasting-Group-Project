@@ -1,0 +1,44 @@
+#Speaker Series 
+
+```{r}
+library("readxl")
+library(fpp2)
+library(fpp3)
+library(ggplot2)
+library(forecast)
+```
+
+
+```{r}
+onlineTrafficData <- read_xlsx("C:\\Users\\louis\\Documents\\IEUniversity\\Forecasting & Time Series Analysis\\Speaker Series\\onlineTraffic.xlsx")
+onlineTrafficData
+```
+
+```{r}
+uniqueVisits <- ts(data = onlineTrafficData$Unique.Visits, start = c(2014, 257), frequency = 365.25)
+autoplot(uniqueVisits)
+```
+
+#Objective: Study habits 
+  #Understanding study habits of students based on different patterns of website visits
+
+
+#Time series analysis 
+
+
+#Different forecasting models and compare 
+  #Regression
+
+
+
+
+
+
+
+
+
+
+
+
+
+
