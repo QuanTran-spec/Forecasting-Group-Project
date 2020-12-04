@@ -1,37 +1,152 @@
 #Speaker Series 
 
 ```{r}
-library("readxl")
+library(readxl)
 library(fpp2)
 library(fpp3)
 library(ggplot2)
 library(forecast)
+library(tidyr)
+library(data.table)
+library(plyr)
+library(xts)
+library(vars)
 ```
 
-
+Import and clean data 
 ```{r}
-onlineTrafficData <- read_xlsx("C:\\Users\\louis\\Documents\\IEUniversity\\Forecasting & Time Series Analysis\\Speaker Series\\onlineTraffic.xlsx")
-onlineTrafficData
+#Read data (make sure it's all in same directory)
+onlineTrafficData <- read_xlsx("./onlineTraffic.xlsx")
+data <- onlineTrafficData
+nrow(data)
+head(data)
+tail(data)
+
+#Date variable isn't as date type and some values are missing
+#create dates from start to end
+test <- ddply(data, .(), summarise, Date = seq(as.Date('2014-09-14'), as.Date('2020-08-19'), by = "day"))
+
+#Populate Date column with new, actual dates
+data$Date <- test$Date
+data
+tail(data)
 ```
 
+Subset 2 years of forecast data 
 ```{r}
-uniqueVisits <- ts(data = onlineTrafficData$Unique.Visits, start = c(2014, 257), frequency = 365.25)
-autoplot(uniqueVisits)
+tail(data)
+data <- data %>% filter(Date > as.Date('2018-08-20'))
+head(data)
+tail(data)
 ```
+
+Convert to ts object
+```{r}
+tsdata <- ts(data, start = c(2018, 233), end = c(2020, 232), frequency = 365)
+
+#ts object of DV 
+tsPL = tsdata[, 'Page.Loads']
+ggtsdisplay(tsPL)
+```
+
+Split train/test for forecasting next 2 weeks (14 days ahead)
+```{r}
+h = 14
+train <- window(tsdata, start = c(2018, 233), end = c(2020, 232 - h), frequency = 365)
+test <- window(tsdata, start = c(2020, 232 - h + 1), frequency = 365)
+length(test[, 'Page.Loads'])
+autoplot(train[,'Page.Loads'])
+
+#DV
+pltrain <- train[, 'Page.Loads']
+pltest <- test[, 'Page.Loads']
+```
+
+Set benchmarks
+```{r}
+sn <- snaive(pltrain, h=h)
+mean <- meanf(pltrain, h=h)
+rw <- rwf(pltrain, h=h)
+rwd <- rwf(pltrain, drift = T, h=h)
+
+#Check accuracy
+accuracy(sn, pltest)
+accuracy(mean,pltest)
+accuracy(rw,pltest)
+accuracy(rwd, pltest)
+
+autoplot(rwd)
+
+#Benchmark MAPE = 24.19 from Random Walk with Drift
+```
+
+Vector Autoregression
+```{r}
+head(train)
+#We'll use VAR between Page.Loads, First.Time.Visits and Returning.Visits
+#Unique visits is equal to first time visits + returning visits so we can't use it in VAR
+#Neither can we run a regression using all three as DV/predictors simultaneously (conceptually wrong)
+
+#Get number of differencing 
+VARselect(train[, c(5, 7,8)], lag.max=8,
+  type="const")[["selection"]]
+
+#From all the information criteria we need to take 8 lags 
+
+#Get var model with p = 8 
+var <- VAR(train[, c(5,7,8)], p=8, type="const")
+
+#Check for residuals autocorrelation
+serial.test(var, lags.pt=10, type="PT.asymptotic")
+
+#They aren't white noise but we can't increase the differencing as we run out of df 
+
+#Produce forecast
+fcvar <- forecast(var, h) 
+autoplot(fcvar)
+
+#Check accuracy
+accuracy(fcvar$forecast$Page.Loads, pltest)
+
+#MAPE = 16.13 which is better than benchmarks. 
+
+#Coefficients interpretation problems as all variables influence each other. Research coefs
+Bcoef(var)
+
+```
+
+
+
+Dynamic harmonic regression 
+```{r}
+bestfit <- list(aicc=Inf)
+for(K in seq(15, 30)) {
+  fit <- auto.arima(uvtrain, xreg=fourier(uvtrain, K=K),seasonal=FALSE)
+  if(fit[["aicc"]] < bestfit[["aicc"]]) {
+    bestfit <- fit
+    bestK <- K
+  }
+}
+auto.arima(uvtrain, xreg = fourier(uvtrain, K=15),seasonal=FALSE)
+bestK
+```
+
 
 #Objective: Study habits 
   #Understanding study habits of students based on different patterns of website visits
+  # -> get most important predictors/ best forecast method for the next 15 weeks based on last 2 years of data
 
 
 #Time series analysis 
 
 
 #Different forecasting models and compare 
+
+#Try 
   #Regression
+  #Splines 
+  #Vector Autoregression
 
-#Regression2
-
-changes
 
 
 
