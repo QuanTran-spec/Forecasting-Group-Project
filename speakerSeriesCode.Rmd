@@ -34,8 +34,10 @@ tail(data)
 
 Subset 2 years of forecast data 
 ```{r}
+#Save clean data 
+full_data <- data
 tail(data)
-data <- data %>% filter(Date > as.Date('2018-08-20'))
+data <- full_data %>% filter(Date > as.Date('2018-08-20'))
 head(data)
 tail(data)
 ```
@@ -43,10 +45,13 @@ tail(data)
 Convert to ts object
 ```{r}
 tsdata <- ts(data, start = c(2018, 233), end = c(2020, 232), frequency = 365)
+head(tsdata)
+autoplot(tsdata[, c('Page.Loads', 'First.Time.Visits', 'Returning.Visits')], facet = TRUE)
+  
 
 #ts object of DV 
-tsPL = tsdata[, 'Page.Loads']
-ggtsdisplay(tsPL)
+plts = tsdata[, 'Page.Loads']
+ggtsdisplay(plts)
 ```
 
 Split train/test for forecasting next 2 weeks (14 days ahead)
@@ -115,26 +120,147 @@ Bcoef(var)
 
 ```
 
-
-
-Dynamic harmonic regression 
+Dynamic Harmonic Regression
 ```{r}
+#Get ndiffs
+ndiffs(pltrain, alpha = 0.05, test = 'kpss')
+
+#Difference once and TS display 
+ggtsdisplay(diff(pltrain))
+```
+
+```{r}
+#Get best K value
 bestfit <- list(aicc=Inf)
-for(K in seq(15, 30)) {
-  fit <- auto.arima(uvtrain, xreg=fourier(uvtrain, K=K),seasonal=FALSE)
+for(K in seq(10, 40, 10)) {
+  fit <- auto.arima(pltrain, d = 1, xreg=fourier(pltrain, K=K), seasonal=FALSE, lambda = 'auto')
   if(fit[["aicc"]] < bestfit[["aicc"]]) {
     bestfit <- fit
     bestK <- K
   }
 }
-auto.arima(uvtrain, xreg = fourier(uvtrain, K=15),seasonal=FALSE)
+
 bestK
 ```
+
+```{r}
+#Narrow K down to around 10 
+for(K in seq(8, 12)) {
+  fit <- auto.arima(pltrain, d = 1, xreg=fourier(pltrain, K=K), seasonal=FALSE, lambda = 'auto')
+  if(fit[["aicc"]] < bestfit[["aicc"]]) {
+    bestfit <- fit
+    bestK <- K
+  }
+}
+
+bestfit
+bestK
+#Best K = 10
+```
+
+```{r}
+#Produce forecasts:
+fchr <- forecast(bestfit, d = 1, xreg=fourier(pltest, K=bestK, h = h))
+autoplot(fchr)
+accuracy(fchr, pltest)
+checkresiduals(fchr)
+
+#ARIMA(5,1,2) with fourier seasonality (K=10) gives us MAPE = 29.33 Worse than benchmarks
+
+
+#Harmonic regression may perform poorly because seasonal component is fixed when our data is too long?
+#Try forecasting using shorter train set
+```
+
+ETS on STL deseasonalized time series
+```{r}
+#Need to take bigger subset to use STL (more than 2 periods)
+subset2 <- full_data %>% filter(Date > as.Date('2017-08-20'))
+
+#Use msts to allow for multiple seasonalities 
+subset2 <- msts(subset2, start = c(2017, 233), seasonal.periods = c(7, 365))
+
+train2 <- window(subset2, start = c(2017, 233), end = c(2020, 232 - h))
+test2 <- window(subset2, start = c(2020, 232 - h + 1))
+
+fit <- mstl(train2[, 'Page.Loads'])
+autoplot(fit)
+#Some seasonality isn't captured by mstl 
+
+fcSTL <- forecast(fit, method = 'ets', h = h)
+autoplot(fcSTL)
+accuracy(fcSTL, test2[, 'Page.Loads'])
+
+#MAPE = 11.27
+
+#Check for better ETS model and t/s.window parameters
+```
+
+TBATS model 
+```{r}
+#Allows for seasonal components to slowly change over time 
+fit <- tbats(train2[,'Page.Loads'])
+tbfc <- forecast(fit, h = h)
+
+#Plot and accuracy check 
+autoplot(tbfc)
+#No boxcox transformation, ARMA(5,5), damping. 3 trigonometric terms for weekly seasonality and 7 for yearly seasonality.
+
+accuracy(tbfc, pltest)
+# MAPE = 12.37
+```
+
+Dynamic Harmonic Regression with weekly & yearly seasonality
+```{r}
+#Get best K 
+windows<- expand.grid(K1 = 2, K2 = seq(6:12), aicc = NA)
+#Actually auto.arima only works with K1 = 2 so expand grid is bit redundant.. 
+
+for(row.i in 1:nrow(windows)) {
+
+   K1 <- windows$K1[row.i]
+   K2 <- windows$K2[row.i]
+
+   fit <- auto.arima(train2[, 'Page.Loads'], d = 1, seasonal = FALSE, lambda = 'auto', xreg = fourier(train2[,'Page.Loads'], K = c(K1,K2)))
+   aicc.i <- fit[['aicc']]    
+   windows$aicc[row.i] <- aicc.i
+    
+}
+
+minaicc<-which.min(windows[,"aicc"])
+best<-windows[minaicc,]
+best
+```
+
+```{r}
+fit <- auto.arima(train2[,'Page.Loads'], d = 1, seasonal = FALSE, lambda = 'auto', xreg = fourier(train2[, 'Page.Loads'], K = c(2,8)))
+
+fc <- forecast(fit, xreg = fourier(train2[, 'Page.Loads'], K = c(2,8), h = h))
+
+#Plot and accuracy check
+autoplot(fc)
+#ARIMA(2,1,5) with multiple seasonality
+
+accuracy(fc, pltest)
+#MAPE = 8.87
+```
+
+Including covariates in the regression
+```{r}
+
+
+```
+
+
+
+#Daily seasonality can't be captured by fourier as frequency = 1? try dummifying working days and including in regression
+
+Try with splines/piecewise
 
 
 #Objective: Study habits 
   #Understanding study habits of students based on different patterns of website visits
-  # -> get most important predictors/ best forecast method for the next 15 weeks based on last 2 years of data
+  # -> get most important predictors/ best forecast method for the next 2 weeks based on last 2 years of data
 
 
 #Time series analysis 
