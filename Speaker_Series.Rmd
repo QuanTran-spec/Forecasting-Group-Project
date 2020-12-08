@@ -11,7 +11,7 @@ library(ggplot2)
 library(tidyverse)
 library(forecast)
 library(tsibble)
-library(reshape2)
+library(hts)
 setwd('/Users/JuanHeslop/Desktop/IE/Forecasting & Time Series Analysis')
 data = read.csv("./supermarket_data.csv")
 ```
@@ -91,7 +91,14 @@ aggr = function(data, by, filtr = NA)
 }
 
 # Example
-
-data_Regions = aggr(data, 'Month', 'Region')
+data_Regions = aggr(data, 'Month', 'Category')
 autoplot(data_Regions)
+```
+
+```{r}
+# With the function that is above we can create Hierarchical Time series for forecasting:
+
+ht = hts(data_Regions)
+ht %>% aggts(levels = 0:1) %>% autoplot(facet = TRUE)
+
 ```
