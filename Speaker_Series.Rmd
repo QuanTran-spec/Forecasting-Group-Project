@@ -1,0 +1,97 @@
+---
+title: "Speaker Series"
+author: "Juan Heslop"
+date: "12/7/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(ggplot2)
+library(tidyverse)
+library(forecast)
+library(tsibble)
+library(reshape2)
+setwd('/Users/JuanHeslop/Desktop/IE/Forecasting & Time Series Analysis')
+data = read.csv("./supermarket_data.csv")
+```
+
+```{r dates}
+data = data[, -c(1, 2, 9)]
+
+data$Order.Date = as.Date(data$Order.Date, '%d/%m/%Y')
+data$Ship.Date = as.Date(data$Ship.Date, '%d/%m/%Y')
+data$Days = data$Ship.Date - data$Order.Date
+```
+
+```{r function}
+# Returns time series of sales aggregated by week or months. 
+# A filter can be selected, so two aggregations are made: 
+# first by categorical variable and then by week/month. 
+# In this case, multiple time series are returned (as many as categories in the filter)
+# Options: 
+#     by = c('Week', 'Month')
+#     filtr = c('Ship.Mode', 'Segment', 'State', 'Region', 'Category', 'Sub.Category')
+
+aggr = function(data, by, filtr = NA)
+  { 
+  if (by == 'Week')
+    {
+    if (is.na(filtr))
+      {
+      data %>%
+        mutate(Week = yearweek(Order.Date)) %>%
+        group_by(Week) %>%
+        summarize(Total = sum(Sales)) -> result
+      final = ts(result[, 2], start = c(2015, 1), end = c(2018, 52), frequency = 52)
+      final[is.na(final)] = 0
+      return(final)
+      }
+    data %>%
+      mutate(Week = yearweek(Order.Date)) %>%
+      group_by(.data[[filtr]], Week) %>%
+      summarize(Total = sum(Sales)) -> result
+
+    final = data.frame(Week = seq(yearweek('2015 W01'), yearweek('2018 W52'), 1))
+    for (r in unique(data[[filtr]]))
+      {
+      selected = result[result[[filtr]] == r, c(2, 3)]
+      colnames(selected) = c('Week', r)
+      final = merge(x = final, y = selected, by = 'Week', all.x = TRUE)
+    }
+    final = ts(final[, 2:ncol(final)], start = c(2015, 1), end = c(2018, 52), frequency = 52)
+    final[is.na(final)] = 0
+    return(final)
+  } 
+  if (is.na(filtr))
+      {
+      data %>%
+        mutate(Month = yearmonth(Order.Date)) %>%
+        group_by(Month) %>%
+        summarize(Total = sum(Sales)) -> result
+      final = ts(result[, 2], start = c(2015, 1), end = c(2018, 12), frequency = 12)
+      final[is.na(final)] = 0
+      return(final)
+      }
+  data %>%
+    mutate(Month = yearmonth(Order.Date)) %>%
+    group_by(.data[[filtr]], Month) %>%
+    summarize(Total = sum(Sales)) -> result
+
+  final = data.frame(Month = seq(yearmonth('2015-01'), yearmonth('2018-12'), 1))
+  for (r in unique(data[[filtr]]))
+    {
+    selected = result[result[[filtr]] == r, c(2, 3)]
+    colnames(selected) = c('Month', r)
+    final = merge(x = final, y = selected, by = 'Month', all.x = TRUE)
+    }
+  final = ts(final[, 2:ncol(final)], start = c(2015, 1), end = c(2018, 12), frequency = 12)
+  final[is.na(final)] = 0
+  return(final)
+}
+
+# Example
+
+data_Regions = aggr(data, 'Month', 'Region')
+autoplot(data_Regions)
+```
