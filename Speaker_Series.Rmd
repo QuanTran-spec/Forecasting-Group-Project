@@ -13,6 +13,7 @@ library(forecast)
 library(tsibble)
 library(hts)
 library(lubridate)
+library(tseries)
 setwd('/Users/JuanHeslop/Desktop/IE/Forecasting & Time Series Analysis/Speaker Series')
 data = read.csv("./superstore_14-17.csv")
 ```
@@ -253,3 +254,69 @@ autoplot(frcst2) + autolayer(test) + autolayer(fcst[, 1])
 accuracy(frcst2, test)[2, 2]
 
 ```
+
+
+
+
+Trying out GARCH models test
+```{r}
+#Monthly profit by product category.
+month.c <- aggr(data, 'Month', filtr[5])[, c(2, 4, 6)]
+autoplot(month.c)
+month.c
+#We could fit an autoregressive model to the data and then from the generated errors try to forecast future variance. 
+#Would maybe produce better results using weekly data but I can't get the function to work breaking it down per week and product category. 
+#Refer to mail Borja
+```
+
+Try using profit aggregated by months, with Office Supplies.
+```{r}
+#We first want to fit an autoregressive model 
+#Test it out using SARIMA 
+foo <- month.c[, 2]
+autoplot(foo)
+
+#Do the usual lambda, differencing etc and obtain best SARIMA manually
+
+#Using auto.arima for simplicity here...
+fitfoo <- auto.arima(foo,
+                approximation = F,
+                stepwise = F,
+                trace = T,
+                nmodels = 100,
+                ic = c("aicc"),
+                test = c("kpss"),
+                seasonal = T,
+                stationary = F,
+                lambda = 'auto')
+
+fitfoo
+checkresiduals(fitfoo)
+```
+
+```{r}
+#get the residuals that we'll try to model with GARCH 
+
+bar <- (fitfoo$residuals)^2 # squaring residuals here so we get the variance
+autoplot(bar) 
+# From the autoplot we suspect residuals have higher residuals in some periods than others
+# Simple video explaining it pretty well: https://www.youtube.com/watch?v=Li95a2biFCU
+
+# get ACF and PACF of residuals to check for GARCH parameters
+ggAcf(bar)
+ggPacf(bar)
+
+#We don't get much from this but I suspect the monthly data is no good, I have yet to try with weekly. 
+#Daily would be ideal, as per this post https://www.r-bloggers.com/2012/07/a-practical-introduction-to-garch-modeling/
+#But we wouldn't have enough datapoints to break it down into region/product type
+
+#Fita garch(1,1)
+garch <- garch(bar, order = c(1,1))
+
+# No good but that's for tomorrow 
+```
+
+
+
+
+
