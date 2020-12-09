@@ -12,93 +12,244 @@ library(tidyverse)
 library(forecast)
 library(tsibble)
 library(hts)
-setwd('/Users/JuanHeslop/Desktop/IE/Forecasting & Time Series Analysis')
-data = read.csv("./supermarket_data.csv")
+library(lubridate)
+setwd('/Users/JuanHeslop/Desktop/IE/Forecasting & Time Series Analysis/Speaker Series')
+data = read.csv("./superstore_14-17.csv")
 ```
+
+Preprocess the data: Fix, dates, check data types, etc. 
 
 ```{r dates}
-data = data[, -c(1, 2, 9)]
+preprocess = function(data){
+  data = data[, -c(1, 2, 9)]
 
-data$Order.Date = as.Date(data$Order.Date, '%d/%m/%Y')
-data$Ship.Date = as.Date(data$Ship.Date, '%d/%m/%Y')
-data$Days = data$Ship.Date - data$Order.Date
+  data$Order.Date = as.Date(data$Order.Date, '%d-%m-%y')
+  data$Ship.Date = as.Date(data$Ship.Date, '%d-%m-%y')
+  data$Days = data$Ship.Date - data$Order.Date
+  
+  # Save a date that is 29/02 which needs to be adjusted when translating the dates
+  date = data[3758, 'Order.Date'] 
+  day(date) = day(date) - 1
+  year(date) = year(date) + 2
+  
+  year(data$Order.Date) = year(data$Order.Date) + 2
+  year(data$Ship.Date) = year(data$Ship.Date) + 2
+  data[is.na(data$Order.Date), 'Order.Date'] = date
+  
+  return(data)
+}
+data = preprocess(data)
 ```
 
-```{r function}
-# Returns time series of sales aggregated by week or months. 
-# A filter can be selected, so two aggregations are made: 
-# first by categorical variable and then by week/month. 
-# In this case, multiple time series are returned (as many as categories in the filter)
-# Options: 
-#     by = c('Week', 'Month')
-#     filtr = c('Ship.Mode', 'Segment', 'State', 'Region', 'Category', 'Sub.Category')
+No missing values: 
 
-aggr = function(data, by, filtr = NA)
-  { 
-  if (by == 'Week')
-    {
-    if (is.na(filtr))
-      {
+```{r}
+sum(apply(is.na(data), 2, sum))
+```
+
+## Exploratody Data Analysis
+
+Make dataframe that contains Price of each Product (might be useful then to consider which variables to drop)
+
+```{r}
+Prices = data.frame(Product.ID = data$Product.ID, 
+                    Product.Price = (data$Sales - data$Profit)/data$Quantity)
+Prices = Prices[unique(data$Product.ID), ]
+```
+
+Understanding the variables: 
+
+- *Sales:* Total paid by customer (considers discounts as well). 
+- *Profit:* Sales - COGS 
+
+We have many categorical variables that describe Sales and Profit. In order to aggregate into months/weeks, create a function that can also take a filters
+
+```{r function}
+# Returns time series of sales and profits aggregated by week or months. 
+# A filter or two filters can be selected, so two or three aggregations are made: 
+# first by categorical variable/s and then by week/month. 
+# In this case, multiple time series are returned (as many as categories in the filter) which are all containes in one ts object
+# Options: 
+#   by = c('Week', 'Month')
+#   filtr = c('Ship.Mode': 4, 'Segment': 3, 'State': 49, 'Region': 4, 'Category': 3, 'Sub.Category': 17) (Numbers represent unique values)
+# If you select two variables for filters, then they must be stored in a vector. 
+
+aggr = function(data, by, filtr = NA){ 
+  if (by == 'Week'){
+    
+    if (is.na(filtr)){
       data %>%
         mutate(Week = yearweek(Order.Date)) %>%
         group_by(Week) %>%
-        summarize(Total = sum(Sales)) -> result
-      final = ts(result[, 2], start = c(2015, 1), end = c(2018, 52), frequency = 52)
+        summarize(Sales = sum(Sales), Profit = sum(Profit)) -> result
+      final = ts(result[, 2:3], start = c(2016, 1), end = c(2019, 52), frequency = 52)
       final[is.na(final)] = 0
       return(final)
-      }
-    data %>%
-      mutate(Week = yearweek(Order.Date)) %>%
-      group_by(.data[[filtr]], Week) %>%
-      summarize(Total = sum(Sales)) -> result
-
-    final = data.frame(Week = seq(yearweek('2015 W01'), yearweek('2018 W52'), 1))
-    for (r in unique(data[[filtr]]))
-      {
-      selected = result[result[[filtr]] == r, c(2, 3)]
-      colnames(selected) = c('Week', r)
-      final = merge(x = final, y = selected, by = 'Week', all.x = TRUE)
-    }
-    final = ts(final[, 2:ncol(final)], start = c(2015, 1), end = c(2018, 52), frequency = 52)
-    final[is.na(final)] = 0
-    return(final)
-  } 
-  if (is.na(filtr))
-      {
+      
+      } else if (lenght(filtr) == 1){
+      data %>%
+        mutate(Week = yearweek(Order.Date)) %>%
+        group_by(.data[[filtr[1]]], Week) %>%
+        summarize(Total = sum(Sales), Profit = sum(Profit)) -> result
+      final = data.frame(Week = seq(yearweek('2016 W01'), yearweek('2019 W52'), 1))
+      for (r in unique(data[[filtr[1]]])){
+        selected = result[result[[filtr[1]]] == r, c(2:4)]
+        colnames(selected) = c('Week', paste('S', r, sep = '_'), paste('P', r, sep = '_'))
+        final = merge(x = final, y = selected, by = 'Week', all.x = TRUE)}
+      final = ts(final[, 2:ncol(final)], start = c(2016, 1), end = c(2019, 52), frequency = 52)
+      final[is.na(final)] = 0
+      return(final)} 
+  }
+    
+  if (is.na(filtr)){
       data %>%
         mutate(Month = yearmonth(Order.Date)) %>%
         group_by(Month) %>%
-        summarize(Total = sum(Sales)) -> result
-      final = ts(result[, 2], start = c(2015, 1), end = c(2018, 12), frequency = 12)
+        summarize(Sales = sum(Sales), Profit = sum(Profit)) -> result
+      final = ts(result[, 2:3], start = c(2016, 1), end = c(2019, 12), frequency = 12)
       final[is.na(final)] = 0
       return(final)
-      }
-  data %>%
-    mutate(Month = yearmonth(Order.Date)) %>%
-    group_by(.data[[filtr]], Month) %>%
-    summarize(Total = sum(Sales)) -> result
-
-  final = data.frame(Month = seq(yearmonth('2015-01'), yearmonth('2018-12'), 1))
-  for (r in unique(data[[filtr]]))
-    {
-    selected = result[result[[filtr]] == r, c(2, 3)]
-    colnames(selected) = c('Month', r)
-    final = merge(x = final, y = selected, by = 'Month', all.x = TRUE)
-    }
-  final = ts(final[, 2:ncol(final)], start = c(2015, 1), end = c(2018, 12), frequency = 12)
-  final[is.na(final)] = 0
-  return(final)
+      
+  } else if (length(filtr) == 1){
+      data %>%
+        mutate(Month = yearmonth(Order.Date)) %>%
+        group_by(.data[[filtr[1]]], Month) %>%
+        summarize(Total = sum(Sales), Profit = sum(Profit)) -> result
+      final = data.frame(Month = seq(yearmonth('2016-01'), yearmonth('2019-12'), 1))
+      for (r in unique(data[[filtr[1]]])){
+        selected = result[result[[filtr[1]]] == r, c(2:4)]
+        colnames(selected) = c('Month', paste('S', r, sep = '_'), paste('P', r, sep = '_'))
+        final = merge(x = final, y = selected, by = 'Month', all.x = TRUE)}
+      final = ts(final[, 2:ncol(final)], start = c(2016, 1), end = c(2019, 12), frequency = 12)
+      final[is.na(final)] = 0
+      return(final)
+      
+  } else {
+    data %>%
+      mutate(Month = yearmonth(Order.Date)) %>%
+      group_by(.data[[filtr[1]]], .data[[filtr[2]]], Month) %>%
+      summarize(Total = sum(Sales), Profit = sum(Profit)) -> result
+    final = data.frame(Month = seq(yearmonth('2016-01'), yearmonth('2019-12'), 1))
+    for (r2 in unique(data[[filtr[2]]])){
+      selected1 = result[result[[filtr[2]]] == r2, ]
+      for (r1 in unique(data[[filtr[1]]])){
+        selected2 = selected1[selected1[[filtr[1]]] == r1, c(3:5)]
+        colnames(selected2) = c('Month', paste('S', substr(r1, 1, 4), r2, sep = '_'), paste('P', substr(r1, 1, 4), r2, sep = '_'))
+        final = merge(x = final, y = selected2, by = 'Month', all.x = TRUE)}}
+    final = ts(final[, 2:ncol(final)], start = c(2016, 1), end = c(2019, 12), frequency = 12)
+    final[is.na(final)] = 0
+    return(final)
+  }
 }
+```
 
-# Example
-data_Regions = aggr(data, 'Month', 'Category')
-autoplot(data_Regions)
+Othe prior analysis: Get population for each of the states in the USA to later calculate Sales per capita. However (Borja told me), not whole population, but working population (these are the ones with the money to pay). To do so, if we do not find this, just search online population per state, and a percentage of working class of USA (population from 16 approx to 65 maybe). Then multiply and get an approximation. 
+
+Consider only Total Sales
+
+Weekly:
+
+```{r}
+data_w = aggr(data, 'Week')
+autoplot(data_w)
+```
+
+*Trend*: There could be a slight increasing trend until the first half of 2018, which increases in slope until the end of 2015
+
+*Seasonality* There does not appear to be any singificant seasonal patterns at this granularity. 
+There's a grat spike for a week at the beginning of 2015. Try to identify where it is: 
+
+```{r}
+data[which.max(data$Sales), c(1, 5, 6, 8, 14, 15:18)]
+```
+
+It appears that Sean Miller went wild on Cisco TelePresence Systems. However, they were on sale, 50% off, so actually there was no profit. 
+
+Monthly:
+
+```{r}
+data_m = aggr(data, 'Month')
+autoplot(data_m)
+```
+
+*Trend*: There is now a more clear picture of the increasing trend. 
+
+*Seasonality* There does appear to be a sort of seasonal pattern for the monthly data
+
+```{r}
+grid.arrange(ggseasonplot(data_m[, 1]), ggseasonplot(data_m[, 2]), ncol = 1)
+```
+
+The fact that each year the average sales are increasing shoes the increasing trend, and the fact that we face a non-stationary series. 
+There appear to be seasonal troughs in February, peak in march, a trough in august, peak in september, trough in october, peak in november, and goes back down again. The seasonal fluctuations are far from being stable. 
+
+Now check graphs for all possible filters: 
+
+```{r}
+# This does not work as I included profits after doing it and need to fix it. 
+
+filtr = c('Ship.Mode', 'Segment', 'State', 'Region', 'Category', 'Sub.Category')
+# SALES
+autoplot(aggr(data, 'Month'))
+autoplot(aggr(data, 'Month', filtr[1])) + labs(title = 'Sales')
+autoplot(aggr(data, 'Month', filtr[2])) + labs(title = 'Sales')
+autoplot(aggr(data, 'Month', filtr[3])) + labs(title = 'Sales')
+autoplot(aggr(data, 'Month', filtr[4])) + labs(title = 'Sales')
+autoplot(aggr(data, 'Month', filtr[5])) + labs(title = 'Sales')
+autoplot(aggr(data, 'Month', filtr[6])) + labs(title = 'Sales')
+
+# PROFITS
+autoplot(aggr(data, 'Month'))
+autoplot(aggr(data[, 2], 'Month', filtr[1])) + labs(title = 'Profits')
+autoplot(aggr(data[, 2], 'Month', filtr[2])) + labs(title = 'Profits')
+autoplot(aggr(data[, 2], 'Month', filtr[3])) + labs(title = 'Profits')
+autoplot(aggr(data[, 2], 'Month', filtr[4])) + labs(title = 'Profits')
+autoplot(aggr(data[, 2], 'Month', filtr[5])) + labs(title = 'Profits')
+autoplot(aggr(data[, 2], 'Month', filtr[6])) + labs(title = 'Profits')
+```
+
+# Forecasting: 
+
+
+```{r}
+data_r = aggr(data, 'Month', 'Region')[, seq(1, 7, 2)]
+
+h = 6
+train = ts(data_r[1:(nrow(data_r) - h), ], start = c(2015, 1), frequency = 12)
+test = ts(data_r[(nrow(data_r) - h):nrow(data_r), ], start = c(2018, 7), frequency = 12)
+test.Total = apply(test, 1, sum)
+test = cbind(Total, test)
 ```
 
 ```{r}
-# With the function that is above we can create Hierarchical Time series for forecasting:
+ht = hts(train)
 
-ht = hts(data_Regions)
-ht %>% aggts(levels = 0:1) %>% autoplot(facet = TRUE)
+f1 = forecast(ht, method = 'bu', fmethod = 'ets', h = 7)
+fcst = aggts(f1, levels = 0:1)
+
+autoplot(fcst[, 1]) + autolayer(test[, 1])
+autoplot(fcst[, 2]) + autolayer(test[, 2])
+autoplot(fcst[, 3]) + autolayer(test[, 3])
+autoplot(fcst[, 4]) + autolayer(test[, 4])
+autoplot(fcst[, 5]) + autolayer(test[, 5])
+
+sqrt(apply((fcst - test)^2, 2, sum))/nrow(fcst)
+```
+
+
+```{r}
+data_t = aggr(data, 'Month')[, 1]
+
+h = 6
+train = subset(data_t, end = length(data_t) - h)
+test = subset(data_t, start = length(data_t) - h + 1)
+
+fit_a = auto.arima(train, 
+                   stepwise = FALSE)
+
+frcst2 = forecast(fit_a, h = 6)
+autoplot(frcst2) + autolayer(test) + autolayer(fcst[, 1])
+
+accuracy(frcst2, test)[2, 2]
 
 ```
