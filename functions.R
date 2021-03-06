@@ -80,6 +80,55 @@ aggr = function(data, by, filtr = NA){
       final = ts(final[, 2:ncol(final)], start = c(2016, 1), end = c(2019, 52), frequency = 52)
       final[is.na(final)] = 0
       return(final)} 
+  
+    } else if (by == 'Quarter'){
+    
+    if (is.na(filtr)){
+      data %>%
+        mutate(Quarter = yearquarter(Order.Date)) %>%
+        group_by(Quarter) %>%
+        summarize(Sales = sum(Sales), Profit = sum(Profit)) -> result
+      final = ts(result[, 2:3], start = c(2016, 1), end = c(2019, 4), frequency = 4)
+      final[is.na(final)] = 0
+      return(final)
+      
+    } else if (length(filtr) == 1) {
+      data %>%
+        mutate(Quarter = yearquarter(Order.Date)) %>%
+        group_by(.data[[filtr[1]]], Quarter) %>%
+        summarize(Total = sum(Sales), Profit = sum(Profit)) -> result
+      final_S = data.frame(Quarter = seq(yearquarter('2016 Q1'), yearquarter('2019 Q4'), 1))
+      final_P = data.frame(Quarter = seq(yearquarter('2016 Q1'), yearquarter('2019 Q4'), 1))
+      for (r in unique(data[[filtr[1]]])){
+        selected = result[result[[filtr[1]]] == r, c(2:4)]
+        colnames(selected) = c('Quarter', paste('S', r, sep = '_'), paste('P', r, sep = '_'))
+        final_S = merge(x = final_S, y = selected[c(1, 2)], by = 'Quarter', all.x = TRUE)
+        final_P = merge(x = final_P, y = selected[c(1, 3)], by = 'Quarter', all.x = TRUE)}
+      final = merge(x = final_S, y = final_P, by = 'Quarter')
+      final = ts(final[, 2:ncol(final)], start = c(2016, 1), end = c(2019, 4), frequency = 4)
+      final[is.na(final)] = 0
+      return(final)
+      
+    } else {
+      data %>%
+        mutate(Quarter = yearquarter(Order.Date)) %>%
+        group_by(.data[[filtr[1]]], .data[[filtr[2]]], Quarter) %>%
+        summarize(Total = sum(Sales), Profit = sum(Profit)) -> result
+      final_S = data.frame(Quarter = seq(yearquarter('2016 Q1'), yearquarter('2019 Q4'), 1))
+      final_P = data.frame(Quarter = seq(yearquarter('2016 Q1'), yearquarter('2019 Q4'), 1))
+      for (r2 in unique(data[[filtr[2]]])){
+        selected1 = result[result[[filtr[2]]] == r2, ]
+        for (r1 in unique(data[[filtr[1]]])){
+          selected2 = selected1[selected1[[filtr[1]]] == r1, c(3:5)]
+          colnames(selected2) = c('Quarter', paste('S', '_', substr(r1, 1, 4), substr(r2, 1, 4), sep = ''), paste('P', '_', substr(r1, 1, 4), substr(r2, 1, 4), sep = ''))
+          final_S = merge(x = final_S, y = selected2[c(1, 2)], by = 'Quarter', all.x = TRUE)
+          final_P = merge(x = final_P, y = selected2[c(1, 3)], by = 'Quarter', all.x = TRUE)}}
+      final = merge(x = final_S, y = final_P, by = 'Quarter')
+      final = ts(final[, 2:ncol(final)], start = c(2016, 1), end = c(2019, 4), frequency = 4)
+      final[is.na(final)] = 0
+      return(final)
+    }
+      
   }
   
   if (is.na(filtr)){
@@ -119,7 +168,7 @@ aggr = function(data, by, filtr = NA){
       selected1 = result[result[[filtr[2]]] == r2, ]
       for (r1 in unique(data[[filtr[1]]])){
         selected2 = selected1[selected1[[filtr[1]]] == r1, c(3:5)]
-        colnames(selected2) = c('Month', paste('S', substr(r1, 1, 4), r2, sep = '_'), paste('P', substr(r1, 1, 4), r2, sep = '_'))
+        colnames(selected2) = c('Month', paste('S', '_', substr(r1, 1, 4), substr(r2, 1, 4), sep = ''), paste('P', '_', substr(r1, 1, 4), substr(r2, 1, 4), sep = ''))
         final_S = merge(x = final_S, y = selected2[c(1, 2)], by = 'Month', all.x = TRUE)
         final_P = merge(x = final_P, y = selected2[c(1, 3)], by = 'Month', all.x = TRUE)}}
     final = merge(x = final_S, y = final_P, by = 'Month')
@@ -128,6 +177,32 @@ aggr = function(data, by, filtr = NA){
     return(final)
   }
 }
+
+aggr_scale = function(data, pop, by, filtr){
+  
+  if (by == 'Month'){
+    region_ts = aggr(data, by, filtr)
+    columns = colnames(region_ts)
+    for (i in 1:ncol(region_ts)){
+      region = substr(columns[i], 3, nchar(columns[i]))
+      region_ts[1:12, i] = region_ts[1:12, i]/pop[pop$Location == region, 2]
+      region_ts[13:24, i] = region_ts[13:24, i]/pop[pop$Location == region, 3]
+      region_ts[25:36, i] = region_ts[25:36, i]/pop[pop$Location == region, 4]
+      region_ts[37:48, i] = region_ts[37:48, i]/pop[pop$Location == region, 5]}
+    
+  } else {
+    region_ts = aggr(data, by, filtr)
+    columns = colnames(region_ts)
+    for (i in 1:ncol(region_ts)){
+      region = substr(columns[i], 3, nchar(columns[i]))
+      region_ts[1:52, i] = region_ts[1:52, i]/pop[pop$Location == region, 2]
+      region_ts[53:104, i] = region_ts[53:104, i]/pop[pop$Location == region, 3]
+      region_ts[105:156, i] = region_ts[105:156, i]/pop[pop$Location == region, 4]
+      region_ts[157:208, i] = region_ts[157:208, i]/pop[pop$Location == region, 5]}
+  }
+  return(region_ts)
+}
+
 
 get_populations = function(){
   pop = read.csv('./population.csv')
@@ -162,4 +237,11 @@ get_populations = function(){
   result = result[, -1]
   row.names(result) = NULL
   
+}
+
+preprocess2 = function(data){
+  data$Order.Date = as.Date(data$Order.Date, '%Y-%m-%d')
+  data$Ship.Date = as.Date(data$Ship.Date, '%Y-%m-%d')
+  data$Days = data$Ship.Date - data$Order.Date
+  return(data)
 }
