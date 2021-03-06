@@ -1,287 +1,578 @@
-#Speaker Series 
+---
+title: "Speaker Series"
+author: "Juan Heslop & Quan Tran Minh"
+date: "12/14/2020"
+output: html_document
+---
 
-```{r}
-library(readxl)
-library(fpp2)
-library(fpp3)
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
 library(ggplot2)
+library(tidyverse)
 library(forecast)
-library(tidyr)
-library(data.table)
-library(plyr)
-library(xts)
-library(vars)
+library(tsibble)
+library(hts)
+library(lubridate)
+library(gridExtra)
+library(usmap)
+theme_set(theme_bw())
+
+source("./functions.R")
 ```
 
-Import and clean data 
-```{r}
-#Read data (make sure it's all in same directory)
-onlineTrafficData <- read_xlsx("./onlineTraffic.xlsx")
-data <- onlineTrafficData
-nrow(data)
-head(data)
-tail(data)
+# Superstore Sales & Profit 
 
-#Date variable isn't as date type and some values are missing
-#create dates from start to end
-test <- ddply(data, .(), summarise, Date = seq(as.Date('2014-09-14'), as.Date('2020-08-19'), by = "day"))
+Get and Preprocess the Data: 
 
-#Populate Date column with new, actual dates
-data$Date <- test$Date
-data
-tail(data)
+```{r dates}
+data = read.csv("./Data/superstore.csv")
+data = preprocess(data)
+prices = get_products(data)
+# population = read.csv('./Data/population.csv')
 ```
 
-Subset 2 years of forecast data 
+Understanding the variables: 
+
+- *Sales:* Total paid by customer (considers discounts as well). Same as Revenue
+- *Profit:* Sales - Cost of Good - Operating and Other Expenses - Interest - Taxes
+
+## Company Overview: 
+
+  For confidienciality reasons, we could not have acces to the exact name of the company which provided witht his data. Therefore, time plots and variations cannos be specifically tied to real events: 
+
 ```{r}
-#Save clean data 
-full_data <- data
-tail(data)
-data <- full_data %>% filter(Date > as.Date('2018-08-20'))
-head(data)
-tail(data)
+d = aggr(data, 'Quarter')
+
+sales = data.frame(Sales = c(sum(d[1:3, 1]),
+sum(d[4:6, 1]),
+sum(d[7:9, 1]),
+sum(d[10:12, 1])))
+
+profits = data.frame(Profits = c(sum(d[1:3, 2]),
+sum(d[4:6, 2]),
+sum(d[7:9, 2]),
+sum(d[10:12, 2])))
+
+net_margin = profits/sales
 ```
 
-Convert to ts object
+As has been said, our company is a small retail company. Being a small company, we are more dependent on external economic factors. We are less stable, less immersed in the market, and will surely suffer the consequences should there be an economic disaster. This makes our analysis even more relevant. 
+
 ```{r}
-tsdata <- ts(data, start = c(2018, 233), end = c(2020, 232), frequency = 365)
-head(tsdata)
-autoplot(tsdata[, c('Page.Loads', 'First.Time.Visits', 'Returning.Visits')], facet = TRUE)
+autoplot(ts(sales, start = 2016))
+```
+
+- Revenue: Steadily increasing from 300k per year to 500k in the previous 2019 year
+- Profit: Also increased corresponging to an increase in sales, reaching a maximum of 70k for the final year
+
+(These are very low numbers when compared with the retail giants in the USA, as Wallmart, that had a revenue of over 300 billion for 2019 in the USA alone)
+
+These produce the following net margins for the fiscal years 2016 through 2019: 
+
+```{r}
+autoplot(ts(net_margin, start = 2016))
+```
+
+- How to optimize post covid. Everything is in hold. Starting again, how could we optimize retail business. 2020 is already covid, so it is out, it is an outlier. We postulate this scenario. 
+
+The Average Net Margin is 12.47%. To compare this number within the industry, this must be filtered by the type of industry as it is very dependent. Our retail contains 3 subfields: 
+
+```{r}
+data_quarter = aggr(data, 'Quarter', 'Category')
+round(apply(data_quarter, 2, sum)[4:6]/apply(data_quarter, 2, sum)[1:3], 3)
+```
+
+Furniture: 2.5%. Furniture stores sell high-end merchandise, which gives the impression that the margins are high. However, it’s costly to make quality furniture. This is why the net profit margin is so low. However, still it is pretty low comparing with competing companies in the industry given that the net profit margin for the industry is about 4% in average. 
+
+Technology: 17.4%. Average of the industry is 17% so okay. https://www.investopedia.com/ask/answers/060215/what-average-profit-margin-company-telecommunications-sector.asp
+
+Office Supplies: Well over the average value, doing very good
+
+So we see a problem: the furniture market that we are investing on is not generating a significant margin that is increasing our overall sales, and not doing so competitively compared to other industries. This has problems, because given that ecnonomic circumstances might get worse from now on, investing in furniture might be risky. 
+
+## See which Variables are important:  
+
+
+## See which Variables are important:  
+
+Model Total Profits
+
+```{r}
+profitsaux <- aggr(data, 'Month')[, 2]
+profits = aggr(data, 'Month')[, 2]
+
+h = 6
+train = subset(profits, end = length(profits) - h)
+test = subset(profits, start = length(profits) - h + 1)
+
+fit = auto.arima(train, 
+                 approximation = FALSE, 
+                 stepwise = FALSE)
+fcst = forecast(fit, h = h)
+
+fit
+autoplot(train) + autolayer(fcst) + autolayer(test) + autolayer(fit$fitted)
+(rmse_profit = accuracy(fcst, test)[2, 2])
+```
+
+Take advantage of inherent structure of data: see if information within the variables is relevant for predicting total sales, or only add noise: 
+
+```{r}
+pred_profits = function(data, filtr){
+  Profit_Region = aggr(data, 'Month', filtr)
+  Profit_Region = Profit_Region[, (ncol(Profit_Region)/2 + 1):ncol(Profit_Region)]
+  colnames(Profit_Region) = substr(colnames(Profit_Region), 3, nchar(as.character(colnames(Profit_Region))))
   
-
-#ts object of DV 
-plts = tsdata[, 'Page.Loads']
-ggtsdisplay(plts)
-```
-
-Split train/test for forecasting next 2 weeks (14 days ahead)
-```{r}
-h = 14
-train <- window(tsdata, start = c(2018, 233), end = c(2020, 232 - h), frequency = 365)
-test <- window(tsdata, start = c(2020, 232 - h + 1), frequency = 365)
-length(test[, 'Page.Loads'])
-autoplot(train[,'Page.Loads'])
-
-#DV
-pltrain <- train[, 'Page.Loads']
-pltest <- test[, 'Page.Loads']
-```
-
-Set benchmarks
-```{r}
-sn <- snaive(pltrain, h=h)
-mean <- meanf(pltrain, h=h)
-rw <- rwf(pltrain, h=h)
-rwd <- rwf(pltrain, drift = T, h=h)
-
-#Check accuracy
-accuracy(sn, pltest)
-accuracy(mean,pltest)
-accuracy(rw,pltest)
-accuracy(rwd, pltest)
-
-autoplot(rwd)
-
-#Benchmark MAPE = 24.19 from Random Walk with Drift
-```
-
-Vector Autoregression
-```{r}
-head(train)
-#We'll use VAR between Page.Loads, First.Time.Visits and Returning.Visits
-#Unique visits is equal to first time visits + returning visits so we can't use it in VAR
-#Neither can we run a regression using all three as DV/predictors simultaneously (conceptually wrong)
-
-#Get number of differencing 
-VARselect(train[, c(5, 7,8)], lag.max=8,
-  type="const")[["selection"]]
-
-#From all the information criteria we need to take 8 lags 
-
-#Get var model with p = 8 
-var <- VAR(train[, c(5,7,8)], p=8, type="const")
-
-#Check for residuals autocorrelation
-serial.test(var, lags.pt=10, type="PT.asymptotic")
-
-#They aren't white noise but we can't increase the differencing as we run out of df 
-
-#Produce forecast
-fcvar <- forecast(var, h) 
-autoplot(fcvar)
-
-#Check accuracy
-accuracy(fcvar$forecast$Page.Loads, pltest)
-
-#MAPE = 16.13 which is better than benchmarks. 
-
-#Coefficients interpretation problems as all variables influence each other. Research coefs
-Bcoef(var)
-
-```
-
-Dynamic Harmonic Regression
-```{r}
-#Get ndiffs
-ndiffs(pltrain, alpha = 0.05, test = 'kpss')
-
-#Difference once and TS display 
-ggtsdisplay(diff(pltrain))
+  h = 6
+  train = ts(Profit_Region[1:(nrow(Profit_Region) - h), ], start = c(2015, 1), frequency = 12)
+  test = ts(Profit_Region[(nrow(Profit_Region) - h + 1):nrow(Profit_Region), ], start = c(2018, 7), frequency = 12)
+  
+  ht_train = hts(train)
+  ht_test = hts(test)
+  
+  f1 = forecast(ht_train, method = 'bu', fmethod = 'arima', h = h, keep.fitted = TRUE, keep.resid = TRUE)
+  fcst = aggts(f1, levels = 0:1)
+  
+  return(accuracy(fcst[, 1], aggts(ht_test, levels = 0))[2])
+}
 ```
 
 ```{r}
-#Get best K value
+filtr = c('Segment', 'State', 'Region', 'Category', 'Sub.Category')
+rmse_profits = rep(NA, length(filtr))
+for (i in 1:length(filtr)){
+  rmse_profits[i] = pred_profits(data, filtr[i])
+}
+
+rmse_profits
+best_rmse <- rmse_profits[1]
+#Best RMSE = 2222.353
+```
+
+Dynamic Harmonic Regression 
+```{r}
 bestfit <- list(aicc=Inf)
-for(K in seq(10, 40, 10)) {
-  fit <- auto.arima(pltrain, d = 1, xreg=fourier(pltrain, K=K), seasonal=FALSE, lambda = 'auto')
+for(K in seq(6)) {
+  fit <- auto.arima(train, xreg=fourier(train, K=K),seasonal=FALSE)
   if(fit[["aicc"]] < bestfit[["aicc"]]) {
     bestfit <- fit
     bestK <- K
   }
 }
 
-bestK
+message('Number of K fourier pairs:\t', bestK)
+dhr <- auto.arima(train, xreg=fourier(train, K=bestK),seasonal=FALSE)
+
+fc_dhr <- forecast(bestfit, xreg = fourier(train, K = bestK, h = h))
+
+accuracy(fc_dhr, test)[2,2]
+accuracy(fc_dhr, test)[2,2]<best_rmse
+
+#RMSE = 2230.580
 ```
 
+TBATS model
 ```{r}
-#Narrow K down to around 10 
-for(K in seq(8, 12)) {
-  fit <- auto.arima(pltrain, d = 1, xreg=fourier(pltrain, K=K), seasonal=FALSE, lambda = 'auto')
-  if(fit[["aicc"]] < bestfit[["aicc"]]) {
-    bestfit <- fit
-    bestK <- K
-  }
-}
+fit_tbats <- tbats(train)
+fc_tbats <- forecast(fit_tbats, h=h)
+accuracy(fc_tbats, test)[2,2]
+accuracy(fc_tbats, test)[2,2]<best_rmse
 
-bestfit
-bestK
-#Best K = 10
+#RMSE = 2775.121
 ```
 
+ETS
 ```{r}
-#Produce forecasts:
-fchr <- forecast(bestfit, d = 1, xreg=fourier(pltest, K=bestK, h = h))
-autoplot(fchr)
-accuracy(fchr, pltest)
-checkresiduals(fchr)
-
-#ARIMA(5,1,2) with fourier seasonality (K=10) gives us MAPE = 29.33 Worse than benchmarks
-
-
-#Harmonic regression may perform poorly because seasonal component is fixed when our data is too long?
-#Try forecasting using shorter train set
+fit_ets <- ets(train)
+fc_ets <- forecast(fit_ets, h=h)
+accuracy(fc_ets, test)[2,2]
+accuracy(fc_ets, test)[2,2]<best_rmse
 ```
 
-ETS on STL deseasonalized time series
+STL+ETS
 ```{r}
-#Need to take bigger subset to use STL (more than 2 periods)
-subset2 <- full_data %>% filter(Date > as.Date('2017-08-20'))
+windows <- expand.grid(twindow = seq(7, 35, 2), swindow = seq(7, 45, 2), RMSE = NA)
 
-#Use msts to allow for multiple seasonalities 
-subset2 <- msts(subset2, start = c(2017, 233), seasonal.periods = c(7, 365))
-
-train2 <- window(subset2, start = c(2017, 233), end = c(2020, 232 - h))
-test2 <- window(subset2, start = c(2020, 232 - h + 1))
-
-fit <- mstl(train2[, 'Page.Loads'])
-autoplot(fit)
-#Some seasonality isn't captured by mstl 
-
-fcSTL <- forecast(fit, method = 'ets', h = h)
-autoplot(fcSTL)
-accuracy(fcSTL, test2[, 'Page.Loads'])
-
-#MAPE = 11.27
-
-#Check for better ETS model and t/s.window parameters
-```
-
-TBATS model 
-```{r}
-#Allows for seasonal components to slowly change over time 
-fit <- tbats(train2[,'Page.Loads'])
-tbfc <- forecast(fit, h = h)
-
-#Plot and accuracy check 
-autoplot(tbfc)
-#No boxcox transformation, ARMA(5,5), damping. 3 trigonometric terms for weekly seasonality and 7 for yearly seasonality.
-
-accuracy(tbfc, pltest)
-# MAPE = 12.37
-```
-
-Dynamic Harmonic Regression with weekly & yearly seasonality
-```{r}
-#Get best K 
-windows<- expand.grid(K1 = 2, K2 = seq(6:12), aicc = NA)
-#Actually auto.arima only works with K1 = 2 so expand grid is bit redundant.. 
-
+#Go through each pairs of values and store p-value and RMSE
 for(row.i in 1:nrow(windows)) {
-
-   K1 <- windows$K1[row.i]
-   K2 <- windows$K2[row.i]
-
-   fit <- auto.arima(train2[, 'Page.Loads'], d = 1, seasonal = FALSE, lambda = 'auto', xreg = fourier(train2[,'Page.Loads'], K = c(K1,K2)))
-   aicc.i <- fit[['aicc']]    
-   windows$aicc[row.i] <- aicc.i
-    
+  
+  #Set t and s windows for current iteration 
+  twindow.i <- windows$twindow[row.i]
+  swindow.i <- windows$swindow[row.i]
+  
+  #Get STL decomposition, setting boxcox transformation automatically
+  currentSTL = stlf(train, t.window = twindow.i , s.window = swindow.i)
+  
+  RMSE.i<-accuracy(currentSTL, test)[2,2]
+  
+  #Populate p-value and RMSE in windows   
+  windows$RMSE[row.i] <- RMSE.i
 }
 
-minaicc<-which.min(windows[,"aicc"])
-best<-windows[minaicc,]
+
+#Get white noise windows 
+
+minerror<-which.min(windows[,"RMSE"])
+best<-windows[minerror,]
+best$RMSE
+best$RMSE<best_rmse
+```
+
+STL+ARIMA
+```{r}
+windows <- expand.grid(twindow = seq(7, 35, 2), swindow = seq(7, 45, 2), RMSE = NA)
+
+#Go through each pairs of values and store p-value and RMSE
+for(row.i in 1:nrow(windows)) {
+  
+  #Set t and s windows for current iteration 
+  twindow.i <- windows$twindow[row.i]
+  swindow.i <- windows$swindow[row.i]
+  
+  #Get STL decomposition, setting boxcox transformation automatically
+  currentSTL = stlf(train, t.window = twindow.i , s.window = swindow.i, method = 'arima')
+  
+  RMSE.i<-accuracy(currentSTL, test)[2,2]
+  
+  #Populate p-value and RMSE in windows   
+  windows$RMSE[row.i] <- RMSE.i
+}
+
+
+#Get white noise windows 
+
+minerror<-which.min(windows[,"RMSE"])
+best<-windows[minerror,]
+best$RMSE
+best$RMSE<best_rmse
+```
+
+ARFIMA
+```{r}
+fit_arfima <- arfima(train, 
+                     lambda = 'auto',
+                     stepwise = FALSE, 
+                     approximation = FALSE)
+fc_arfima <- forecast(fit_arfima, h=h)
+
+accuracy(fc_arfima, test)[2,2]
+```
+
+- Predicting Profit improves when considering: 
+  - Segment
+  - State
+  - Sub Categories
+  
+This means that there is valuable information within these categories. When aggregated into total profits this information might be lost. Forecasts appear to decrease because they might belong to signifncantly different stochastic processes. 
+
+We cannot control the Segment variable as it is dependent. Try to gain insight into State and Cub Categories
+
+
+The best forecast is given by using a bottom-up approach with Segment. Dynamic harmonic regression does really well too, has almost the same RMSE.
+
+
+Plot forecasts of profit before rightsizing 
+```{r}
+fc_pre <- forecast(bestfit, xreg = fourier(train, K = bestK, h = h))
+
+autoplot(fc_dhr) + 
+  xlab('Years') +
+  ylab('Net Profit ($)') +
+  ggtitle('')
+```
+
+
+
+Model Total Profits after filtering
+
+```{r}
+filtered = read.csv("./data_trans.csv")
+filtered = preprocess2(filtered)
+```
+
+
+```{r}
+profits = aggr(filtered, 'Month')[, 2]
+autoplot(profits)
+
+h = 6
+train = subset(profits, end = length(profits) - h)
+test = subset(profits, start = length(profits) - h + 1)
+
+fit = auto.arima(train, 
+                 approximation = FALSE, 
+                 stepwise = FALSE)
+fcst = forecast(fit, h = h)
+
+
+autoplot(train) + autolayer(fcst) + autolayer(test) + autolayer(fit$fitted)
+(rmse_profit = accuracy(fcst, test)[2, 2])
+```
+
+Take advantage of inherent structure of data: see if information within the variables is relevant for predicting total sales, or only add noise: 
+
+
+```{r}
+filtr = c('Segment', 'State', 'Region', 'Category', 'Sub.Category')
+rmse_profits = rep(NA, length(filtr))
+for (i in 1:length(filtr)){
+  rmse_profits[i] = pred_profits(filtered, filtr[i])
+}
+
+rmse_profits
+```
+
+Dynamic Harmonic Regression 
+```{r}
+bestfit <- list(aicc=Inf)
+for(K in seq(6)) {
+  fit <- auto.arima(train, xreg=fourier(train, K=K),seasonal=FALSE)
+  if(fit[["aicc"]] < bestfit[["aicc"]]) {
+    bestfit <- fit
+    bestK <- K
+  }
+}
+
+message('Number of K fourier pairs:\t', bestK)
+dhr <- auto.arima(train, xreg=fourier(train, K=bestK),seasonal=FALSE)
+
+fc_dhr2 <- forecast(bestfit, xreg = fourier(train, K = bestK, h = h))
+autoplot(fc_dhr2)
+accuracy(fc_dhr2, test)[2,2]
+accuracy(fc_dhr2, test)[2,2]<best_rmse
+```
+
+TBATS model
+```{r}
+fit_tbats2 <- tbats(train)
+fc_tbats2 <- forecast(fit_tbats2, h=h)
+accuracy(fc_tbats2, test)[2,2]
+accuracy(fc_tbats2, test)[2,2]<best_rmse
+```
+
+ETS
+```{r}
+fit_ets2 <- ets(train)
+fc_ets2 <- forecast(fit_ets2, h=h)
+accuracy(fc_ets2, test)[2,2]
+accuracy(fc_ets2, test)[2,2]<best_rmse
+```
+
+STL+ETS
+```{r}
+windows <- expand.grid(twindow = seq(7, 35, 2), swindow = seq(7, 45, 2), RMSE = NA)
+
+#Go through each pairs of values and store p-value and RMSE
+for(row.i in 1:nrow(windows)) {
+  
+  #Set t and s windows for current iteration 
+  twindow.i <- windows$twindow[row.i]
+  swindow.i <- windows$swindow[row.i]
+  
+  #Get STL decomposition, setting boxcox transformation automatically
+  currentSTL = stlf(train, t.window = twindow.i , s.window = swindow.i, h = h)
+  
+  RMSE.i<-accuracy(currentSTL, test)[2,2]
+  
+  #Populate p-value and RMSE in windows   
+  windows$RMSE[row.i] <- RMSE.i
+}
+
+
+#Get white noise windows 
+
+minerror<-which.min(windows[,"RMSE"])
+best<-windows[minerror,]
 best
+best$RMSE<best_rmse
+```
+
+STL+ARIMA
+```{r}
+windows <- expand.grid(twindow = seq(7, 35, 2), swindow = seq(7, 45, 2), RMSE = NA)
+
+#Go through each pairs of values and store p-value and RMSE
+for(row.i in 1:nrow(windows)) {
+  
+  #Set t and s windows for current iteration 
+  twindow.i <- windows$twindow[row.i]
+  swindow.i <- windows$swindow[row.i]
+  
+  #Get STL decomposition, setting boxcox transformation automatically
+  currentSTL = stlf(train, t.window = twindow.i , s.window = swindow.i, method = 'arima', h = h)
+  
+  RMSE.i<-accuracy(currentSTL, test)[2,2]
+  
+  #Populate p-value and RMSE in windows   
+  windows$RMSE[row.i] <- RMSE.i
+}
+
+
+#Get white noise windows 
+
+minerror<-which.min(windows[,"RMSE"])
+best<-windows[minerror,]
+best$RMSE
+best$RMSE<best_rmse
+```
+
+ARFIMA
+```{r}
+fit_arfima2 <- arfima(train, 
+                     lambda = 'auto',
+                     stepwise = FALSE, 
+                     approximation = FALSE)
+fc_arfima2 <- forecast(fit_arfima2, h=h)
+
+accuracy(fc_arfima2, test)[2,2]
+```
+
+Plot best forecast after rightsizing
+```{r}
+fc <- stlf(train, t.window = 31 , s.window = 9, h = h)
+clrs <- c("blueviolet", "red")
+
+autoplot(train) +
+  autolayer(fc, series="After Rightsizing", PI = TRUE) +
+  autolayer(fc_pre, series='Before Rightsizing', PI = FALSE) +
+  ggtitle("") +
+  xlab("Year") +
+  ylab("Net Profit ($)") +
+  guides(colour=guide_legend(title="Data series"), 
+         fill=guide_legend(title="Prediction interval")) +
+  scale_color_manual(values=clrs)
+```
+
+
+## State
+
+```{r}
+states = aggr(data, 'Month', 'State')
+states = states[, (ncol(states)/2 + 1):ncol(states)]
+colnames(states) = substr(colnames(states), 3, nchar(as.character(colnames(states))))
+
+h = 6
+train = ts(states[1:(nrow(states) - h), ], start = c(2016, 1), frequency = 12)
+test = ts(states[(nrow(states) - h + 1):nrow(states), ], start = c(2019, 7), frequency = 12)
+
+ht_train = hts(train)
+ht_test = hts(test)
+
+f1 = forecast(ht_train, method = 'bu', fmethod = 'arima', h = h, keep.fitted = TRUE, keep.resid = TRUE)
+fcst = aggts(f1, levels = 0:1)
+
+autoplot(aggts(ht_train, levels = 0)) + autolayer(aggts(ht_test, levels = 0)) + autolayer(fcst[, 1])
+accuracy(fcst[, 1], aggts(ht_test, levels = 0))[2]
 ```
 
 ```{r}
-fit <- auto.arima(train2[,'Page.Loads'], d = 1, seasonal = FALSE, lambda = 'auto', xreg = fourier(train2[, 'Page.Loads'], K = c(2,8)))
-
-fc <- forecast(fit, xreg = fourier(train2[, 'Page.Loads'], K = c(2,8), h = h))
-
-#Plot and accuracy check
-autoplot(fc)
-#ARIMA(2,1,5) with multiple seasonality
-
-accuracy(fc, pltest)
-#MAPE = 8.87
+mask = apply(states, 2, sum) < 0
+drop_state = colnames(states)[mask]
+drop_state
 ```
 
-Including covariates in the regression
+10 unprofitabble states. 
+
+## Sub.Categories
+
 ```{r}
+categories = aggr(data, 'Month', 'Sub.Category')
+categories = categories[, (ncol(categories)/2 + 1):ncol(categories)]
+colnames(categories) = substr(colnames(categories), 3, nchar(as.character(colnames(categories))))
 
+h = 6
+train = ts(categories[1:(nrow(categories) - h), ], start = c(2016, 1), frequency = 12)
+test = ts(categories[(nrow(categories) - h + 1):nrow(categories), ], start = c(2019, 7), frequency = 12)
 
+ht_train = hts(train)
+ht_test = hts(test)
+
+f1 = forecast(ht_train, method = 'bu', fmethod = 'arima', h = h, keep.fitted = TRUE, keep.resid = TRUE)
+fcst = aggts(f1, levels = 0:1)
+
+autoplot(aggts(ht_train, levels = 0)) + autolayer(aggts(ht_test, levels = 0)) + autolayer(fcst[, 1])
+accuracy(fcst[, 1], aggts(ht_test, levels = 0))[2]
 ```
 
+```{r}
+mask = apply(categories, 2, sum) < 0
+drop_scat = colnames(categories)[mask]
+```
 
+3 unprofitable subcategories. 
 
-#Daily seasonality can't be captured by fourier as frequency = 1? try dummifying working days and including in regression
+```{r}
+mask_state = ! (data$State  %in% drop_state) 
+mask_cat = ! (data$Sub.Category  %in% drop_scat)
+sum(mask_state | mask_cat)
+sum(mask_state & mask_cat)
+```
 
-Try with splines/piecewise
+We cannot filter out these parts of the market because they represent a large propotion of the total market size of our retail store. Also they depend on each other: 
 
+Florida: 
 
-#Objective: Study habits 
-  #Understanding study habits of students based on different patterns of website visits
-  # -> get most important predictors/ best forecast method for the next 2 weeks based on last 2 years of data
+```{r}
+fff = aggr(data, 'Quarter', c('Category', 'State'))
+mask = str_split(colnames(fff), '_', simplify = TRUE)[, 3] %in% drop_state
 
+fff = fff[, mask]
+florida = fff[, c(1:3, (ncol(fff)/2 + 1):(ncol(fff)/2 + 3))]
+colnames(florida) = str_split(colnames(florida), '_', simplify = TRUE)[, 2]
 
-#Time series analysis 
+autoplot(window(florida[, 4:6], start = 2019)) + 
+  labs(title = 'Florida', y = 'Profits', color = 'Category') +
+  theme(legend.position = 'bottom')
+```
 
+Therefore, we need to analyze them together:
 
-#Different forecasting models and compare 
+## Filter by Both: 
 
-#Try 
-  #Regression
-  #Splines 
-  #Vector Autoregression
+```{r}
+both = aggr(data, 'Quarter', c('State', 'Sub.Category'))
+both = both[, (ncol(both)/2 + 1):ncol(both)]
+colnames(both) = substr(colnames(both), 3, nchar(as.character(colnames(both))))
 
+mask = apply(both, 2, sum) < 0
+drop_both = colnames(both)[mask]
+split = str_split(drop_both, '_')
 
+sum(mask)/ncol(both)
+```
 
+9% of the markets we are investing in (State and Product type) are non profitable. Loose these: 
 
+```{r}
+mask = vector(length = nrow(data))
+for (i in 1:nrow(data)){
+  remove = F
+  for (j in 1:length(split)){
+    remove = remove | ((data$State[i] == split[[j]][1]) & (data$Sub.Category[i] == split[[j]][2]))
+  }
+  mask[i] = remove
+}
 
+data_trans = data[! mask, ]
+```
 
+Map the outcome: 
 
+```{r}
+split2 = str_split(drop_both, '_', simplify = TRUE)
+t = table(split2[,1], split2[, 2])
+counts = apply(t, 1, sum)
 
+res = data.frame(state = unique(as.character(data$State)))
+other = data.frame(state = names(counts), 
+                   Count = unname(counts))
+res = merge(res, other, by = 'state', all.x = TRUE)
+res[is.na(res)] = 0
 
+res$Count = ifelse(res$Count == 1, 2, res$Count)
+res$Count = ifelse(res$Count == 9, 8, res$Count)
 
-
-
-
+plot_usmap(data = res, values = "Count", color = "white") + 
+  scale_fill_continuous( low = "slategray1", high = "dodgerblue1", name = "Dropped (2021)", label = scales::comma) + 
+  theme(legend.position = "right") 
+```
